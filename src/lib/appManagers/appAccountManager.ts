@@ -5,8 +5,9 @@ import tsNow from '@helpers/tsNow';
 import createSerializedQueue from '@helpers/createSerializedQueue';
 import noop from '@helpers/noop';
 import readBlobAsDataURL from '@helpers/blob/readBlobAsDataURL';
+import bytesToHex from '@helpers/bytes/bytesToHex';
 import {AccountAuthorizations, AuthSignIn, AuthSignUp, Authorization, EmailVerification, EmailVerifyPurpose, InputCheckPasswordSRP, InputPasskeyCredential, Update, User, UserProfilePhoto} from '@layer';
-import {DcId, TrueDcId} from '@types';
+import {DcAuthKey, DcId, DcServerSalt, TrueDcId} from '@types';
 import AccountController from '@lib/accounts/accountController';
 import type {SessionUserFields} from '@lib/accounts/types';
 import {AppManager} from '@appManagers/manager';
@@ -442,6 +443,72 @@ export default class AppAccountManager extends AppManager {
     }
 
     return authorization;
+  }
+
+  /**
+   * Signs in with a session taken out of another client (Pyrogram, GramJS,
+   * gogram...). The session string carries the permanent auth key of its DC;
+   * writing that key into the slot is enough for the server to recognize the
+   * account, so no phone number, login code or cloud password is needed. The
+   * user is asked of the server by the key itself.
+   *
+   * @param dcId the DC that holds the account
+   * @param authKeyHex the 256-byte key as 512 lowercase/uppercase hex characters
+   */
+  public async importSessionString(dcId: DcId, authKeyHex: string) {
+    if(!/^[0-9a-f]{512}$/i.test(authKeyHex)) {
+      throw new Error('INVALID_AUTH_KEY');
+    }
+
+    const trueDcId = dcId as TrueDcId;
+    const authKeyKey: DcAuthKey = `dc${trueDcId}_auth_key`;
+    const serverSaltKey: DcServerSalt = `dc${trueDcId}_server_salt`;
+
+    // * the key is written before it can be checked: the server is the only one
+    // * that can say whether it belongs to an account. A key it rejects leaves
+    // * the slot as it was, or a later phone sign-in would be sent to this DC.
+    const discard = async() => {
+      await AccountController.update(this.getAccountNumber(), {
+        [authKeyKey]: undefined,
+        [serverSaltKey]: undefined,
+        sign_in_dc_id: undefined
+      }).catch(noop);
+
+      // * the sign-in goes back to the DC it would have started on without this attempt
+      this.apiManager.setBaseDcId(App.baseDcId);
+    };
+
+    await AccountController.update(this.getAccountNumber(), {
+      [authKeyKey]: authKeyHex,
+      // * a placeholder salt: the server sends the current one back on the first message
+      [serverSaltKey]: '0'.repeat(16)
+    });
+
+    if(!this.apiManager.setBaseDcId(dcId)) {
+      await discard();
+      throw new Error('INVALID_DC');
+    }
+
+    // * a connection opened before the key was written (the sign-in screen pre-warms
+    // * the DCs) still signs with the key it was opened with: rebuild it from the slot
+    this.apiManager.resetNetworkers(dcId);
+
+    // * authenticated by the key just written: the server answers with the account it belongs to
+    const users = await this.apiManager.invokeApi('users.getUsers', {
+      id: [{_: 'inputUserSelf'}]
+    }, {dcId, ignoreErrors: true}).catch(async(err) => {
+      await discard();
+      throw err;
+    });
+
+    const user = users.find((user) => user._ === 'user') as User.user;
+    if(!user) {
+      await discard();
+      throw new Error('SESSION_INVALID');
+    }
+
+    await this.apiManager.setUser(user);
+    return user;
   }
 
   /**

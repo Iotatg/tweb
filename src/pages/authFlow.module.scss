@@ -214,6 +214,41 @@ $corner-button-size: 2.5rem;
   text-align: initial;
 }
 
+// Session-string field on the session-login card. A raw <textarea> (the string
+// is long and has no line structure of its own) dressed as `.input-field-input`,
+// in the monospace font because the value is a piece of data. The markup carries
+// `dir="ltr"`: a session string is always left to right, whatever the interface.
+.sessionInput {
+  width: 100%;
+  min-height: 5.5rem;
+  padding: .75rem 1rem;
+  border: 1px solid var(--input-search-border-color);
+  border-radius: $input-border-radius;
+  background-color: var(--surface-color);
+  color: var(--primary-text-color);
+  font-size: var(--font-size-16);
+  font-family: var(--font-monospace);
+  line-height: var(--line-height);
+  resize: vertical;
+  overflow-wrap: anywhere;
+  transition: .2s border-color;
+
+  @include hover() {
+    &:not(:focus) {
+      border-color: var(--primary-color);
+    }
+  }
+
+  &:focus {
+    border-color: var(--primary-color);
+    outline: none;
+  }
+
+  &::placeholder {
+    color: var(--input-placeholder-color);
+  }
+}
+
 .wordSubmit {
   width: 100%;
   margin-top: 1rem;

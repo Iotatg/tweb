@@ -279,6 +279,38 @@ export class ApiManager extends ApiManagerMethods {
     this.appAccountManager.saveSessionUser();
   }
 
+  /**
+   * Drops the connections to a DC, and whatever is being opened for it, so the
+   * next request goes out with the permanent key the slot holds now. A session
+   * imported from a string replaces that key as a whole, and a networker built
+   * for the key that was there before would keep signing with it.
+   */
+  public resetNetworkers(dcId: DcId) {
+    const id = +dcId;
+    for(const transportType in this.cachedNetworkers) {
+      const connections = this.cachedNetworkers[transportType as TransportType];
+      for(const connectionType in connections) {
+        const dcs = connections[connectionType as ConnectionType];
+        const networkers = dcs[id];
+        if(!networkers) {
+          continue;
+        }
+
+        delete dcs[id];
+        for(const networker of networkers) {
+          networker.destroy();
+          this.networkerFactory.removeNetworker(networker);
+        }
+      }
+    }
+
+    for(const getKey in this.gettingNetworkers) {
+      if(getKey.startsWith(`${id}-`)) {
+        delete this.gettingNetworkers[getKey];
+      }
+    }
+  }
+
   /** false for a DC the client does not connect to: the base stays where it is, and nothing of it is kept */
   public setBaseDcId(dcId: DcId) {
     if(!isValidDcId(dcId, Modes.test)) {

@@ -74,6 +74,15 @@ const lang = {
   'Login.QR.Cancel': 'Log in by phone number >',
   'Login.QR.Login': 'Log in by QR Code >',
   'Login.QR.Subtitle': 'Scan with Telegram app on your phone',
+  'Login.Session.Login': 'Log in by session string >',
+  'Login.Session.Title': 'Log in by Session String',
+  'Login.Session.Subtitle': 'Import a session from another Telegram client',
+  'Login.Session.Placeholder': 'Paste your session string',
+  'Login.Session.Label': 'Session string',
+  'Login.Session.Button': 'Log in',
+  'Login.Session.Cancel': 'Log in by phone number >',
+  'Login.Session.Invalid': 'Invalid session string',
+  'Login.Session.TestMismatch': 'This session is for a different server type',
   // the link target stays empty on purpose: tweb's formatter takes the anchor from the arguments
   // for `[]()`, while a `%1$@` inside the target makes it start looking at argument 1 and crash
   // on the missing one (the macOS string this came from substitutes the url into the target)

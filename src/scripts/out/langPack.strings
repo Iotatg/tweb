@@ -6264,6 +6264,15 @@
 "Login.QR.Cancel" = "Log in by phone number >";
 "Login.QR.Login" = "Log in by QR Code >";
 "Login.QR.Subtitle" = "Scan with Telegram app on your phone";
+"Login.Session.Login" = "Log in by session string >";
+"Login.Session.Title" = "Log in by Session String";
+"Login.Session.Subtitle" = "Import a session from another Telegram client";
+"Login.Session.Placeholder" = "Paste your session string";
+"Login.Session.Label" = "Session string";
+"Login.Session.Button" = "Log in";
+"Login.Session.Cancel" = "Log in by phone number >";
+"Login.Session.Invalid" = "Invalid session string";
+"Login.Session.TestMismatch" = "This session is for a different server type";
 "PhoneNumber.Code.Fragment.Info" = "Get the code in the Numbers section on [Fragment]()";
 "PHONE_CODE_INVALID" = "Invalid code";
 "PHONE_CODE_EXPIRED" = "Code expired";

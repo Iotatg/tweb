@@ -181,7 +181,7 @@ export default async function addAccount(accountNumber: ActiveAccountNumber) {
     // * the sign-in starts where the last one of the slot stopped - but for the import of a web token: that
     // * belongs to the page opened with it, and would route its destination through the app of this account
     const resumed = state.authState;
-    const authState: MountAuthFlowState = !resumed || resumed._ === 'authStateSignedIn' || resumed._ === 'authStateSignImport' ?
+    const authState: MountAuthFlowState = !resumed || resumed._ === 'authStateSignedIn' || resumed._ === 'authStateSignImport' || resumed._ === 'authStateSignSession' ?
       STATE_INIT.authState as MountAuthFlowState :
       resumed;
 

@@ -128,7 +128,7 @@ type PartialByKeys<T, K extends keyof T = never> =
   }[keyof T];
 
 
-export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.emailSetup | AuthState.emailSetupCode | AuthState.password | AuthState.signUp | AuthState.signedIn | AuthState.signImport;
+export type AuthState = AuthState.signIn | AuthState.signQr | AuthState.authCode | AuthState.emailSetup | AuthState.emailSetupCode | AuthState.password | AuthState.signUp | AuthState.signedIn | AuthState.signImport | AuthState.signSession;
 export namespace AuthState {
   export type signIn = {
     _: 'authStateSignIn'
@@ -183,6 +183,11 @@ export namespace AuthState {
       isTest: boolean,
       tgAddr: string
     }
+  };
+
+  /** The session-string sign-in screen. It never holds the string itself: the secret stays in the field. */
+  export type signSession = {
+    _: 'authStateSignSession'
   };
 }
 

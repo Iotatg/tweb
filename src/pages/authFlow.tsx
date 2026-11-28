@@ -32,7 +32,8 @@ export type CardName =
   | 'signUp'
   | 'emailRecover'
   | 'signQR'
-  | 'signImport';
+  | 'signImport'
+  | 'signSession';
 
 export type CardPayloadMap = {
   signIn: void;
@@ -48,6 +49,7 @@ export type CardPayloadMap = {
   emailRecover: {email_pattern: string};
   signQR: void;
   signImport: AuthState.signImport['data'];
+  signSession: void;
 };
 
 /**

@@ -40,6 +40,7 @@ const SignUpCard = lazy(() => import('@/pages/cards/SignUpCard'));
 const EmailRecoverCard = lazy(() => import('@/pages/cards/EmailRecoverCard'));
 const SignQRCard = lazy(() => import('@/pages/cards/SignQRCard'));
 const SignImportCard = lazy(() => import('@/pages/cards/SignImportCard'));
+const SignSessionCard = lazy(() => import('@/pages/cards/SignSessionCard'));
 
 /* ------------------------------------------------------------------ */
 /* Host                                                               */
@@ -248,6 +249,9 @@ function CardsTransition(): JSX.Element {
       </Match>
       <Match when={matchCard('signImport')} keyed>
         {(spec) => <SignImportCard spec={spec} />}
+      </Match>
+      <Match when={matchCard('signSession')} keyed>
+        {(spec) => <SignSessionCard spec={spec} />}
       </Match>
     </Switch>
   ));

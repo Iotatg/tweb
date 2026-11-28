@@ -278,6 +278,12 @@ export default function SignInCard(_props: {spec: Spec}) {
         onClick={() => navigate({name: 'signQR'})}
         text="Login.QR.Login"
       />
+      <Button
+        class="btn-primary btn-secondary btn-primary-transparent primary"
+        disabled={submitting()}
+        onClick={() => navigate({name: 'signSession'})}
+        text="Login.Session.Login"
+      />
       <PasskeyLoginButton disabled={submitting()} />
     </AuthCard>
   );

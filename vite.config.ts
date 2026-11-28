@@ -104,6 +104,8 @@ const USE_DEV_HTTP2 = !USE_SSL && !process.env.TWEB_PREVIEW && !process.env.VITE
 const serverOptions: ServerOptions = {
   host,
   port: USE_SSL ? 443 : 8080,
+  // * the online preview reaches the dev server through this domain
+  allowedHosts: ['.monkeycode-ai.live'],
   fs: {
     allow: [...SERVER_FS_ALLOW],
     // Vite's defaults plus tmp/: it holds auth seeds and other credentials, and bundles that boot

@@ -134,6 +134,8 @@ function authStateToCardSpec(authState: MountAuthFlowState): CardSpec {
       return {name: 'signUp', payload: authState.authCode};
     case 'authStateSignImport':
       return {name: 'signImport', payload: authState.data};
+    case 'authStateSignSession':
+      return {name: 'signSession'};
     default: {
       const exhaustive: never = authState;
       throw new Error(`Unknown auth state: ${JSON.stringify(exhaustive)}`);
