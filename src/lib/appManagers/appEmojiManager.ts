@@ -1,0 +1,493 @@
+import type {MyDocument} from '@appManagers/appDocsManager';
+import App from '@config/app';
+import indexOfAndSplice from '@helpers/array/indexOfAndSplice';
+import isObject from '@helpers/object/isObject';
+import validateInitObject from '@helpers/object/validateInitObject';
+import fixEmoji from '@lib/richTextProcessor/fixEmoji';
+import SearchIndex from '@lib/searchIndex';
+import {AppManager} from '@appManagers/manager';
+import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
+import pause from '@helpers/schedulers/pause';
+import filterUnique from '@helpers/array/filterUnique';
+import assumeType from '@helpers/assumeType';
+import {EmojiGroup, EmojiList, MessagesEmojiGroups} from '@layer';
+import flatten from '@helpers/array/flatten';
+import forgetFailedRequest from '@helpers/forgetFailedRequest';
+import {EmojiSkinTone, getEmojiSkinToneBase, getEmojiSkinToneVariants} from '@helpers/emojiSkinTone';
+
+type EmojiLangPack = {
+  keywords: {
+    [keyword: string]: string[],
+  },
+  version: number,
+  langCode: string,
+  // * how its differences were applied: a pack kept before they added and took out emoji (it replaced a keyword's emoji
+  // * with those to add or to take out) may hold keywords with wrong emoji, and is fetched whole once more
+  format: number
+};
+
+const EMOJI_LANG_PACK_FORMAT = 2;
+
+const EMOJI_LANG_PACK: EmojiLangPack = {
+  keywords: {},
+  version: 0,
+  langCode: App.langPackCode,
+  format: EMOJI_LANG_PACK_FORMAT
+};
+
+const RECENT_MAX_LENGTH = 32;
+
+type EmojiType = 'native' | 'custom';
+type EmojiGroupType = 'esg' | 'stickers' | 'status' | 'profilePhoto';
+// * the stickers panel has groups of its own, as tdesktop's EmojiStatuses::requestStickerGroups asks for them
+const EMOJI_GROUPS_METHODS: {[type in EmojiGroupType]: 'messages.getEmojiGroups' | 'messages.getEmojiStickerGroups' | 'messages.getEmojiStatusGroups' | 'messages.getEmojiProfilePhotoGroups'} = {
+  esg: 'messages.getEmojiGroups',
+  stickers: 'messages.getEmojiStickerGroups',
+  status: 'messages.getEmojiStatusGroups',
+  profilePhoto: 'messages.getEmojiProfilePhotoGroups'
+};
+
+export class AppEmojiManager extends AppManager {
+  private static POPULAR_EMOJI = ['😂', '😘', '❤️', '😍', '😊', '😁', '👍', '☺️', '😔', '😄', '😭', '💋', '😒', '😳', '😜', '🙈', '😉', '😃', '😢', '😝', '😱', '😡', '😏', '😞', '😅', '😚', '🙊', '😌', '😀', '😋', '😆', '👌', '😐', '😕'];
+  private keywordLangPacks: {
+    [langCode: string]: EmojiLangPack
+  } = {};
+
+  private index: SearchIndex<EmojiLangPack['keywords'][keyof EmojiLangPack['keywords']]>;
+  private indexedLangPacks: {[langCode: string]: boolean} = {};
+
+  private getKeywordsPromises: {[langCode: string]: Promise<EmojiLangPack>} = {};
+
+  private recent: {native?: string[], custom?: DocId[]} = {};
+  private getRecentEmojisPromises: {native?: Promise<string[]>, custom?: Promise<DocId[]>} = {};
+  private emojiVariants: {[emoji: string]: EmojiSkinTone};
+  private getEmojiVariantsPromise: Promise<AppEmojiManager['emojiVariants']>;
+
+  private getCustomEmojiDocumentsPromise: Promise<any>;
+  private getCustomEmojiDocumentPromises: Map<DocId, CancellablePromise<MyDocument>> = new Map();
+
+  private emojiGroups: {[type in EmojiGroupType]?: MaybePromise<{group: EmojiGroup, document: MyDocument}[]>} = {};
+
+  /* public getPopularEmoji() {
+    return stateStorage.get('emojis_popular').then((popEmojis) => {
+      var result = []
+      if (popEmojis && popEmojis.length) {
+        for (var i = 0, len = popEmojis.length; i < len; i++) {
+          result.push({code: popEmojis[i][0], rate: popEmojis[i][1]})
+        }
+        callback(result)
+        return
+      }
+
+      return stateStorage.get('emojis_recent').then((recentEmojis) => {
+        recentEmojis = recentEmojis || popular || []
+        var shortcut
+        var code
+        for (var i = 0, len = recentEmojis.length; i < len; i++) {
+          shortcut = recentEmojis[i]
+          if (Array.isArray(shortcut)) {
+            shortcut = shortcut[0]
+          }
+          if (shortcut && typeof shortcut === 'string') {
+            if (shortcut.charAt(0) == ':') {
+              shortcut = shortcut.substr(1, shortcut.length - 2)
+            }
+            if (code = shortcuts[shortcut]) {
+              result.push({code: code, rate: 1})
+            }
+          }
+        }
+        callback(result)
+      });
+    });
+  }
+
+  function pushPopularEmoji (code) {
+    getPopularEmoji(function (popularEmoji) {
+      var exists = false
+      var count = popularEmoji.length
+      var result = []
+      for (var i = 0; i < count; i++) {
+        if (popularEmoji[i].code == code) {
+          exists = true
+          popularEmoji[i].rate++
+        }
+        result.push([popularEmoji[i].code, popularEmoji[i].rate])
+      }
+      if (exists) {
+        result.sort(function (a, b) {
+          return b[1] - a[1]
+        })
+      } else {
+        if (result.length > 41) {
+          result = result.slice(0, 41)
+        }
+        result.push([code, 1])
+      }
+      ConfigStorage.set({emojis_popular: result})
+    })
+  } */
+
+  public getEmojiKeywords(langCode: string = App.langPackCode) {
+    const promise = this.getKeywordsPromises[langCode];
+    if(promise) {
+      return promise;
+    }
+
+    const storageKey: any = 'emojiKeywords_' + langCode;
+    return this.getKeywordsPromises[langCode] = this.appStateManager.storage.get(storageKey).then((pack: EmojiLangPack) => {
+      // * one of an older format is fetched whole once more - and is what there is, should that fail
+      let older: EmojiLangPack;
+      if(isObject(pack) && pack.format !== EMOJI_LANG_PACK_FORMAT) {
+        older = pack;
+        pack = undefined;
+      }
+
+      if(!isObject(pack)) {
+        pack = {} as any;
+      }
+
+      validateInitObject(EMOJI_LANG_PACK, pack);
+
+      // important
+      pack.langCode = langCode;
+      this.keywordLangPacks[langCode] = pack;
+
+      return this.apiManager.invokeApi('messages.getEmojiKeywordsDifference', {
+        lang_code: pack.langCode,
+        from_version: pack.version
+      }).then((keywordsDifference) => {
+        pack.version = keywordsDifference.version;
+
+        // * a difference adds the emoji of an `emojiKeyword` to its keyword and takes those of an `emojiKeywordDeleted`
+        // * out of it, as tdesktop's ApplyDifference does: the keyword's other emoji stay (from version 0 every keyword
+        // * comes as an addition)
+        const packKeywords = pack.keywords;
+        for(const entry of keywordsDifference.keywords) {
+          const {keyword, emoticons} = entry;
+          // * its own emoji only: a keyword can be a name an object has already ('constructor')
+          const kept = Object.prototype.hasOwnProperty.call(packKeywords, keyword) ? packKeywords[keyword] : [];
+          if(entry._ === 'emojiKeywordDeleted') {
+            const left = kept.filter((emoticon) => !emoticons.includes(emoticon));
+            if(left.length) packKeywords[keyword] = left;
+            else delete packKeywords[keyword];
+          } else {
+            packKeywords[keyword] = filterUnique(kept.concat(emoticons));
+          }
+        }
+
+        this.appStateManager.storage.set({
+          [storageKey]: pack
+        });
+
+        return pack;
+      }, () => {
+        if(older) {
+          older.langCode = langCode;
+          this.keywordLangPacks[langCode] = older;
+          return older;
+        }
+
+        return pack;
+      });
+    });
+  }
+
+  public getBothEmojiKeywords() {
+    const promises: Promise<any>[] = [
+      this.getEmojiKeywords()
+    ];
+
+    if(this.networkerFactory.language !== App.langPackCode) {
+      promises.push(this.getEmojiKeywords(this.networkerFactory.language));
+    }
+
+    if(!this.recent.native) {
+      promises.push(this.getRecentEmojis('native'));
+    }
+
+    if(this.rootScope.premium) {
+      promises.push(this.appStickersManager.preloadEmojiSets());
+    }
+
+    return Promise.all(promises);
+  }
+
+  private indexEmojis() {
+    if(!this.index) {
+      this.index = new SearchIndex({minChars: 2, fullWords: true});
+    }
+
+    for(const langCode in this.keywordLangPacks) {
+      if(this.indexedLangPacks[langCode]) {
+        continue;
+      }
+
+      const pack = this.keywordLangPacks[langCode];
+      const keywords = pack.keywords;
+
+      for(const keyword in keywords) {
+        const emoticons = keywords[keyword];
+        this.index.indexObject(emoticons, keyword);
+      }
+
+      this.indexedLangPacks[langCode] = true;
+    }
+  }
+
+  private searchEmojis({q, limit = 40, minChars = 2, addCustom}: {
+    q: string,
+    limit?: number,
+    minChars?: number,
+    addCustom?: boolean,
+  }) {
+    this.indexEmojis();
+
+    q = q.toLowerCase().replace(/_/g, ' ');
+
+    // const perf = performance.now();
+    let emojis: Array<string>/* , docIds: Array<DocId> */;
+    if(q.trim()) {
+      const set = this.index.search(q, minChars);
+      emojis = filterUnique(flatten(Array.from(set)));
+      emojis.length = Math.min(40, emojis.length);
+    } else {
+      emojis = this.recent.native.concat(AppEmojiManager.POPULAR_EMOJI).slice(0, RECENT_MAX_LENGTH);
+      emojis = filterUnique(emojis);
+    }
+
+    const appEmojis: AppEmoji[] = [];
+    const foundCustomEmoji: Set<DocId> = new Set();
+    const customEmojiIndex = addCustom && this.appStickersManager.getEmojisSearchIndex();
+    emojis.forEach((emoji) => {
+      if(/* this.rootScope.premium &&  */customEmojiIndex) {
+        const customEmojisResult = customEmojiIndex.search(emoji, minChars);
+        const customEmojis = Array.from(customEmojisResult)
+        .filter((docId) => !foundCustomEmoji.has(docId))
+        .map((docId) => {
+          foundCustomEmoji.add(docId);
+          return {docId, emoji};
+        });
+        appEmojis.push(...customEmojis);
+      }
+
+      appEmojis.push({emoji});
+    });
+
+    appEmojis.length = Math.min(limit, appEmojis.length);
+    // docIds = emojis.reduce((acc, emoji) => {
+    //   acc.push(...customEmojiIndex.search(emoji));
+    //   return acc;
+    // }, []);
+
+    // docIds = filterUnique(docIds);
+    // docIds.length = Math.min(40, docIds.length);
+
+    // appEmojis.push(
+    //   ...(docIds || []).map((docId) => ({docId, emoji: ''})),
+    //   ...emojis.map((emoji) => ({emoji}))
+    // );
+    // console.log('searchEmojis', q, 'time', performance.now() - perf);
+
+    /* for(let i = 0, length = emojis.length; i < length; ++i) {
+      if(emojis[i].includes(zeroWidthJoiner) && !emojis[i].includes('\ufe0f')) {
+        emojis[i] += '\ufe0f';
+      }
+    } */
+
+    return appEmojis;
+  }
+
+  public async prepareAndSearchEmojis(options: Parameters<AppEmojiManager['searchEmojis']>[0]) {
+    await Promise.all([
+      this.getBothEmojiKeywords(),
+      this.appStickersManager.preloadEmojiSets()
+    ]);
+
+    return this.searchEmojis(options);
+  }
+
+  public getEmojiVariants() {
+    return this.getEmojiVariantsPromise ??= this.appStateManager.getState().then((state) => {
+      return this.emojiVariants = state.emojiVariants || {};
+    });
+  }
+
+  public async saveEmojiVariant(emoji: string, tone: EmojiSkinTone) {
+    const toneVariants = getEmojiSkinToneVariants(emoji);
+    if(!toneVariants || !Number.isInteger(tone) || tone < 0 || tone > 5) {
+      return;
+    }
+
+    const {baseEmoji, variants} = toneVariants;
+    const emojiVariants = await this.getEmojiVariants();
+    emojiVariants[baseEmoji] = tone;
+    this.appStateManager.pushToState('emojiVariants', emojiVariants);
+    this.rootScope.dispatchEvent('emoji_variant', {
+      baseEmoji,
+      emoji: variants[tone],
+      tone
+    });
+  }
+
+  public getRecentEmojis<T extends EmojiType>(type: 'custom'): Promise<DocId[]>;
+  public getRecentEmojis<T extends EmojiType>(type: 'native'): Promise<string[]>;
+  public getRecentEmojis<T extends EmojiType>(type: T): Promise<string[] | DocId[]> {
+    const promises = this.getRecentEmojisPromises;
+    return promises[type] ??= this.appStateManager.getState().then((state) => {
+      let recent: string[] | DocId[] = [];
+      if(type === 'native') {
+        const {recentEmoji} = state;
+        recent = Array.isArray(recentEmoji) && recentEmoji.length ? recentEmoji : AppEmojiManager.POPULAR_EMOJI;
+        const normalized = filterUnique(recent.map((emoji) => getEmojiSkinToneBase(emoji as string)));
+        if(normalized.length !== recent.length || normalized.some((emoji, index) => emoji !== recent[index])) {
+          this.appStateManager.pushToState('recentEmoji', normalized as string[]);
+        }
+        recent = normalized;
+      } else {
+        const {recentCustomEmoji} = state;
+        recent = Array.isArray(recentCustomEmoji) && recentCustomEmoji.length ? recentCustomEmoji : [];
+      }
+
+      return this.recent[type] = recent as any;
+    }) as any;
+  }
+
+  public modifyRecentEmoji(emoji: AppEmoji, add: boolean) {
+    const type: EmojiType = emoji.docId ? 'custom' : 'native';
+    emoji.emoji = fixEmoji(emoji.emoji);
+    if(type === 'native') {
+      emoji.emoji = getEmojiSkinToneBase(emoji.emoji);
+    }
+    // @ts-ignore
+    this.getRecentEmojis(type).then((recent) => {
+      const i = emoji.docId || emoji.emoji;
+      indexOfAndSplice(recent, i);
+      if(add) recent.unshift(i);
+      recent.splice(RECENT_MAX_LENGTH, recent.length - RECENT_MAX_LENGTH);
+
+      this.appStateManager.pushToState(type === 'custom' ? 'recentCustomEmoji' : 'recentEmoji', recent);
+      this.rootScope.dispatchEvent('emoji_recent', {emoji, deleted: !add});
+    });
+  }
+
+  public pushRecentEmoji(emoji: AppEmoji) {
+    return this.modifyRecentEmoji(emoji, true);
+  }
+
+  public deleteRecentEmoji(emoji: AppEmoji) {
+    return this.modifyRecentEmoji(emoji, false);
+  }
+
+  public getCustomEmojiDocuments(docIds: DocId[]): Promise<MyDocument[]> {
+    if(!docIds.length) return Promise.resolve([]);
+    return this.apiManager.invokeApi('messages.getCustomEmojiDocuments', {document_id: docIds}).then((documents) => {
+      return documents.map((doc) => {
+        return this.appDocsManager.saveDoc(doc, {
+          type: 'customEmoji',
+          docId: doc.id
+        });
+      });
+    }, () => {
+      return new Array(docIds.length).fill(undefined);
+    });
+  }
+
+  public getCachedCustomEmojiDocuments(docIds: DocId[]) {
+    return docIds.map((docId) => this.appDocsManager.getDoc(docId));
+  }
+
+  private setDebouncedGetCustomEmojiDocuments() {
+    if(this.getCustomEmojiDocumentsPromise || !this.getCustomEmojiDocumentPromises.size) {
+      return;
+    }
+
+    this.getCustomEmojiDocumentsPromise = pause(0).then(() => {
+      const allIds = [...this.getCustomEmojiDocumentPromises.keys()];
+      const promises: Promise<any>[] = [];
+      do {
+        const ids = allIds.splice(0, 100);
+        const promise = this.getCustomEmojiDocuments(ids).then((docs) => {
+          // * by id, as the other clients take them (tdesktop, tdlib, Android): the answer is not bound to the order
+          // * asked, and an id the server does not know may be left out of it - every id asked is answered, that one
+          // * with nothing, or it would be asked for again and again and its emoji wait for ever
+          const byId = new Map(docs.filter(Boolean).map((doc) => ['' + doc.id, doc]));
+          ids.forEach((docId) => {
+            const deferred = this.getCustomEmojiDocumentPromises.get(docId);
+            this.getCustomEmojiDocumentPromises.delete(docId);
+            deferred.resolve(byId.get('' + docId));
+          });
+        });
+
+        promises.push(promise);
+      } while(allIds.length);
+
+      return Promise.all(promises);
+    }).finally(() => {
+      this.getCustomEmojiDocumentsPromise = undefined;
+      this.setDebouncedGetCustomEmojiDocuments();
+    });
+  }
+
+  public getCustomEmojiDocument(id: DocId) {
+    let promise = this.getCustomEmojiDocumentPromises.get(id);
+    if(promise) {
+      return promise;
+    }
+
+    const doc = this.appDocsManager.getDoc(id);
+    if(doc) {
+      return doc;
+    }
+
+    promise = deferredPromise();
+    this.getCustomEmojiDocumentPromises.set(id, promise);
+
+    this.setDebouncedGetCustomEmojiDocuments();
+
+    return promise;
+  }
+
+  public getCustomEmojis() {
+    return this.appStickersManager.getEmojiStickers();
+  }
+
+  public getEmojiGroups(type: EmojiGroupType) {
+    const pushPremiumGroup = (groups: EmojiGroup[]) => {
+      if(groups.some((group) => group._ === 'emojiGroupPremium')) {
+        return;
+      }
+
+      groups.push({
+        _: 'emojiGroupPremium',
+        title: 'Premium',
+        icon_emoji_id: '5269590556232664327'
+      });
+    };
+
+    return this.emojiGroups[type] ??= forgetFailedRequest(this.apiManager.invokeApiSingleProcess({
+      method: EMOJI_GROUPS_METHODS[type],
+      params: {hash: 0},
+      processResult: async(messagesEmojiGroups) => {
+        assumeType<MessagesEmojiGroups.messagesEmojiGroups>(messagesEmojiGroups);
+
+        if(type === 'esg' || type === 'stickers') {
+          pushPremiumGroup(messagesEmojiGroups.groups);
+        }
+
+        const documents = await Promise.all(messagesEmojiGroups.groups.map((emojiGroup) => this.getCustomEmojiDocument(emojiGroup.icon_emoji_id)));
+        return this.emojiGroups[type] = messagesEmojiGroups.groups.map((group, idx) => {
+          return {group, document: documents[idx]};
+        });
+      }
+    }), () => this.emojiGroups[type], () => this.emojiGroups[type] = undefined);
+  }
+
+  public searchCustomEmoji(emoticon: string) {
+    return this.apiManager.invokeApiCacheable(
+      'messages.searchCustomEmoji',
+      {hash: 0, emoticon},
+      {cacheSeconds: 3600, syncIfHasResult: true}
+    ) as MaybePromise<EmojiList.emojiList>;
+  }
+}
